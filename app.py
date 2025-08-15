@@ -1,34 +1,59 @@
-# app.py — AI Fleet Manager Dashboard (fixed-path via sidebar + email)
+# app.py — Falcon Fleet Management AI Dashboard
 import os
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Fleet Manager Dashboard", layout="wide")
-st.title("🚚 AI Fleet Manager Dashboard")
-st.caption("This reads a spreadsheet from your repo (set the path in the sidebar) and can email the current actions.")
+# ─── Branding / assets ─────────────────────────────────────────────────────────
+LOGO_CANDIDATES = [
+    "Falcon-blacktext-eye.png",
+    "assets/Falcon-blacktext-eye.png",
+    "static/Falcon-blacktext-eye.png",
+    "assets/logo.png",
+    "logo.png",
+]
+def find_logo():
+    for p in LOGO_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+_logo = find_logo()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CONFIG (sidebar): point to the sheet inside your repo
-# e.g. "Fleet_Manager_Template_UK.xlsx" (repo root) or "data/Fleet_Manager_Template_UK.xlsx"
-DEFAULT_FILE_PATH = "Fleet_Manager_Template_UK.xlsx"
-FILE_PATH = st.sidebar.text_input("Spreadsheet path (relative to repo)", value=DEFAULT_FILE_PATH).strip()
+st.set_page_config(
+    page_title="Falcon Fleet Management AI Dashboard",
+    page_icon=_logo if _logo else "🦅",
+    layout="wide",
+)
 
-# Thresholds
+# ─── Header ───────────────────────────────────────────────────────────────────
+left, right = st.columns([1, 7])
+with left:
+    if _logo:
+        st.image(_logo, use_container_width=False, width=180)
+with right:
+    st.markdown(
+        "<h1 style='margin-bottom:0'>Falcon Fleet Management AI Dashboard</h1>"
+        "<p style='color:#ccc;margin-top:4px'>Checks MOT & service due items and can email a report.</p>",
+        unsafe_allow_html=True,
+    )
+
+# ─── Sidebar configuration ────────────────────────────────────────────────────
+DEFAULT_FILE_PATH = "Fleet_Manager_Template_UK.xlsx"  # change if yours is in /data
+FILE_PATH = st.sidebar.text_input(
+    "Spreadsheet path (relative to repo)", value=DEFAULT_FILE_PATH
+).strip()
+
 DUE_MILES_DEFAULT = 500
 DUE_DAYS_DEFAULT = 30
-colA, colB = st.sidebar.columns(2)
-due_miles = colA.number_input("Service ‘due soon’ (miles)", 100, 5000, DUE_MILES_DEFAULT, 50)
-due_days  = colB.number_input("MOT ‘due soon’ (days)", 7, 120, DUE_DAYS_DEFAULT, 1)
+cA, cB = st.sidebar.columns(2)
+due_miles = cA.number_input("Service ‘due soon’ (miles)", 100, 5000, DUE_MILES_DEFAULT, 50)
+due_days  = cB.number_input("MOT ‘due soon’ (days)", 7, 120, DUE_DAYS_DEFAULT, 1)
 
-# Email defaults
-def get_secret(name, default=""):
-    # Prefer Streamlit Secrets; fall back to environment variables
+def _secret(name, default=""):
     return st.secrets.get(name, os.getenv(name, default))
-# ──────────────────────────────────────────────────────────────────────────────
 
-# Helpers
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 def parse_date_safe(val):
     if pd.isna(val): return None
     if isinstance(val, (pd.Timestamp, datetime)): return pd.Timestamp(val).to_pydatetime()
@@ -44,7 +69,7 @@ def pick(cols, *aliases):
         if k in norm: return norm[k]
     return None
 
-def think_actions(df, due_miles=DUE_MILES_DEFAULT, due_days=DUE_DAYS_DEFAULT):
+def think_actions(df, due_miles=500, due_days=30):
     cols = df.columns.tolist()
     veh_col  = pick(cols, "reg","registration","vehicle","vrm")
     mile_col = pick(cols, "current mileage","mileage","odometer","current_mileage")
@@ -60,9 +85,9 @@ def think_actions(df, due_miles=DUE_MILES_DEFAULT, due_days=DUE_DAYS_DEFAULT):
     actions = []
     for i, row in df.iterrows():
         vehicle = str(row.get(veh_col, f"Vehicle {i+1}")) if veh_col else f"Vehicle {i+1}"
-        recipient = str(row.get(email_col)) if email_col and pd.notna(row.get(email_col)) else get_secret("EMAIL_DEFAULT_TO","")
+        recipient = str(row.get(email_col)) if email_col and pd.notna(row.get(email_col)) else _secret("EMAIL_DEFAULT_TO","")
 
-        # Service logic
+        # Service
         svc_due, svc_status, svc_reason = False, "", ""
         try:
             if mleft_col and pd.notna(row.get(mleft_col)):
@@ -89,7 +114,7 @@ def think_actions(df, due_miles=DUE_MILES_DEFAULT, due_days=DUE_DAYS_DEFAULT):
         if svc_due:
             actions.append({"Vehicle": vehicle, "Action": "Service", "Status": svc_status, "Reason": svc_reason, "Recipient": recipient})
 
-        # MOT logic
+        # MOT
         expiry = None
         if mot_exp_col and pd.notna(row.get(mot_exp_col)):
             expiry = parse_date_safe(row.get(mot_exp_col))
@@ -110,11 +135,11 @@ def think_actions(df, due_miles=DUE_MILES_DEFAULT, due_days=DUE_DAYS_DEFAULT):
     return pd.DataFrame(actions)
 
 def send_email_with_csv(to_addr, subject, body, csv_bytes, csv_name="fleet_actions.csv"):
-    host = get_secret("SMTP_HOST"); port = int(get_secret("SMTP_PORT","587"))
-    user = get_secret("SMTP_USER");  pwd  = get_secret("SMTP_PASS")
-    use_tls = (str(get_secret("SMTP_TLS","1")) == "1")
-    from_name = get_secret("SMTP_FROM_NAME","AI Fleet Manager")
-    from_addr = get_secret("SMTP_FROM", user or "no-reply@example.com")
+    host = _secret("SMTP_HOST"); port = int(_secret("SMTP_PORT","587"))
+    user = _secret("SMTP_USER");  pwd  = _secret("SMTP_PASS")
+    use_tls = (str(_secret("SMTP_TLS","1")) == "1")
+    from_name = _secret("SMTP_FROM_NAME","AI Fleet Manager")
+    from_addr = _secret("SMTP_FROM", user or "no-reply@example.com")
     if not (host and user and pwd and to_addr):
         raise RuntimeError("SMTP settings or recipient missing.")
 
@@ -144,7 +169,7 @@ def send_email_with_csv(to_addr, subject, body, csv_bytes, csv_name="fleet_actio
     finally:
         s.quit()
 
-# Load the spreadsheet from repo
+# ─── Load spreadsheet ─────────────────────────────────────────────────────────
 try:
     if FILE_PATH.lower().endswith(".csv"):
         df = pd.read_csv(FILE_PATH)
@@ -158,20 +183,19 @@ except Exception as e:
 with st.expander("Preview spreadsheet"):
     st.dataframe(df.head(50), use_container_width=True)
 
-# Compute actions
+# ─── Compute & present ────────────────────────────────────────────────────────
 actions_df = think_actions(df, due_miles=due_miles, due_days=due_days)
 
-# Metrics
 svc_cnt = len(actions_df[actions_df["Action"]=="Service"])
 mot_cnt = len(actions_df[actions_df["Action"]=="MOT"])
 overdue_cnt = len(actions_df[(actions_df["Action"]=="Service") & (actions_df["Status"]=="Due")]) + \
               len(actions_df[(actions_df["Action"]=="MOT") & (actions_df["Status"]=="Overdue")])
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Service actions", svc_cnt)
-c2.metric("MOT actions", mot_cnt)
-c3.metric("Overdue items", overdue_cnt)
-c4.metric("Data timestamp", datetime.now().strftime("%d %b %Y %H:%M"))
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Service actions", svc_cnt)
+m2.metric("MOT actions", mot_cnt)
+m3.metric("Overdue items", overdue_cnt)
+m4.metric("Data timestamp", datetime.now().strftime("%d %b %Y %H:%M"))
 
 st.subheader("Actions required")
 if actions_df.empty:
@@ -181,15 +205,14 @@ else:
     csv_bytes = actions_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download actions as CSV", csv_bytes, "fleet_actions.csv", "text/csv")
 
-    # Email
-    to_default = get_secret("EMAIL_DEFAULT_TO","")
+    to_default = _secret("EMAIL_DEFAULT_TO","")
     to_addr = st.text_input("Send to", value=to_default, placeholder="fleet@yourdomain.co.uk")
     if st.button("✉ Email me this report"):
         try:
             subject = f"[Fleet] Actions report — {datetime.now().strftime('%d %b %Y %H:%M')}"
             body = (f"Hi team,\n\nAttached is the current Fleet actions report (Service/MOT).\n\n"
                     f"Service actions: {svc_cnt}\nMOT actions: {mot_cnt}\nOverdue items: {overdue_cnt}\n\n"
-                    f"Thanks,\nAI Fleet Manager")
+                    f"Thanks,\nFalcon Fleet Management AI Dashboard")
             send_email_with_csv(to_addr, subject, body, csv_bytes)
             st.success(f"Email sent to {to_addr}")
         except Exception as e:
